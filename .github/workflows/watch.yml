@@ -1,0 +1,72 @@
+name: REL 1010 seat watch
+
+on:
+  schedule:
+    # GitHub throttles scheduled runs heavily and drops most of them. Treat
+    # this as "a handful of checks a day", not literally every 7 minutes.
+    - cron: "*/7 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: seat-watch
+  cancel-in-progress: true   # a new run supersedes a wedged one
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5       # never let a hung job block the group
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+
+      - name: Check CRNs
+        id: check
+        env:
+          # ---- edit these to watch a different course ----
+          CRNS: "77673"
+          SUBJECT: REL
+          COURSE: "1010"
+          TERM: "202701"
+          CAMP: "1"
+          # -----------------------------------------------
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          MAIL_PASS: ${{ secrets.MAIL_PASS }}
+        run: python watch_crns.py
+
+      # Backup alert in case the email silently fails. Delete once you have
+      # seen a real email arrive.
+      - name: Open alert issue
+        if: steps.check.outputs.opened == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ME: sashawin7
+        run: |
+          gh issue create \
+            --title "SEAT OPEN: REL 1010 (CRN 77673)" \
+            --body "@$ME The New Testament just opened. Register: https://banweb.gwu.edu/"
+
+      # Commits on EVERY run, not only on status changes. Two reasons: the
+      # repo never goes 60 days quiet (which silently disabled the old
+      # schedule), and last_checked.txt shows from the repo front page that
+      # the watcher is still alive.
+      - name: Persist state and heartbeat
+        if: always()
+        run: |
+          date -u +"last checked: %Y-%m-%d %H:%M UTC" > last_checked.txt
+          git config user.name "seat-watch-bot"
+          git config user.email "seat-watch-bot@users.noreply.github.com"
+          git add state.json last_checked.txt || true
+          git commit -m "check: $(date -u +'%m-%d %H:%M')" || true
+          git pull --rebase --quiet || true
+          git push
